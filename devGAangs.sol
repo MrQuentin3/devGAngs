@@ -177,6 +177,7 @@ contract devGaangs {
         votesTotalCancel[_jobId] += balanceOf(msg.sender, _jobId);
         if (votesTotalCancel[_jobId] * 1000 > minCancelQuorum * totalSupply[_jobId]) {
             jobStatus[_jobId] = JobStatus.CANCELLED;
+            delete votesTotalCancel[_jobId];
         }
         emit VotedToCancelFundingNewJob(_jobId, msg.sender);
     }
@@ -205,6 +206,7 @@ contract devGaangs {
         votesTotalMaster[_jobId][_proposedMaster] += balanceOf(msg.sender, _jobId);
         if (votesTotalMaster[_jobId][_proposedMaster] * 1000 > minMasterQuorum * totalSupply(_jobId)) {
             jobMaster[_jobId] = _proposedMaster;
+            delete votesTotalMaster[_jobId][_proposedMaster];
         }
         emit VotedToCancelFundingNewJob(_jobId, msg.sender, _proposedMaster);
     }
@@ -444,6 +446,7 @@ contract devGaangs {
                     jobTreasury[_jobId] += totalBidOnGaang[_jobId][_apppointedGaang];
                 }
                 appointedDev[_jobId] = _appointedDev;
+                delete votesTotalApproveDev[_jobId][_appointedDev];
             } 
         } else if (_apppointedGaang != 0) {
             votesTotalApproveGaang[_jobId][_apppointedGaang] += balanceOf(msg.sender, _jobId);
@@ -456,6 +459,7 @@ contract devGaangs {
                     jobTreasury[_jobId] += totalBidOnGaang[_jobId][_apppointedGaang];
                 }
                 appointedGaang[_jobId] = _apppointedGaang;
+                delete votesTotalApproveGaang[_jobId][_apppointedGaang];
             } 
         } else {
             return;
@@ -583,7 +587,28 @@ contract devGaangs {
         uint256 _jobId,
         uint256 _amount
     ) {
-
+        require(
+            collectiveJobFunding[_jobId], 
+            "voteToPayWorker: must be active job funding"
+        );
+        require(
+            balanceOf(msg.sender, _jobId) > 0, 
+            "voteToPayWorker: not a contributor"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.WORKING, 
+            "voteToPayWorker: job funding still active"
+        );
+        votesTotalPayWorker[_jobId][_amount] += balanceOf(msg.sender, _jobId);
+        if (votesTotalPayWorker[_jobId][_amount] * 1000 > minApproveQuorum * totalSupply[_jobId]) {
+            if (appointedDev[_jobId] != address(0)) {
+                unstakingFunction(jobFundingToken[_jobId], appointedDev[_jobId], _amount);
+            } else {
+                gaangTreasury[appointedGaang[_jobId]][jobFundingToken[_jobId]] += _amount;
+            }
+            delete votesTotalPayWorker[_jobId][_amount];
+        }
+        emit VotedToPayWorker(_jobId, jobFundingToken[_jobId], _amount);
     }
 
     function workerPaymentFunction(
@@ -705,12 +730,12 @@ contract devGaangs {
             if (appointedDev[_jobId] != address(0) && bidOnDev[_jobId][_user][appointedDev[_jobId]] > 0) {
                 userContributionToJobTreasury[_jobId][_user] += bidOnDev[_jobId][_user][appointedDev[_jobId]];
                 if (collectiveJobFunding[_jobId]) {
-                    _mint(msg.sender, jobId, 1000 * bidOnDev[_jobId][_user][appointedDev[_jobId]], "");
+                    _mint(_user, jobId, 1000 * bidOnDev[_jobId][_user][appointedDev[_jobId]], "");
                 }
             } else if (appointedGaang[_jobId] != 0 && bidOnGaang[_jobId][_user][appointedGaang[_jobId]] > 0) {
                 userContributionToJobTreasury[_jobId][_user] += bidOnGaang[_jobId][_user][appointedGaang[_jobId]];
                 if (collectiveJobFunding[_jobId]) {
-                    _mint(msg.sender, jobId, 1000 * bidOnGaang[_jobId][_user][appointedGaang[_jobId]], "");
+                    _mint(_user, jobId, 1000 * bidOnGaang[_jobId][_user][appointedGaang[_jobId]], "");
                 }
             }
             userUpdatedBalance[_user] = true;
