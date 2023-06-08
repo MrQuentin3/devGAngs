@@ -576,7 +576,6 @@ contract devGaangs {
         if (_amount >= jobTreasury[_jobId]) {
             jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
             jobRewardAmount[_jobId] = _amount;
-            fundingDeadline[_jobId] = block.timestamp + numberFundingDays * 1 days;
             contributeFundingNewJob(_jobId, jobFundingToken[_jobId], jobRewardAmount[_jobId]);
         }
         workerPaymentFunction(_jobId, _amount);
@@ -601,15 +600,48 @@ contract devGaangs {
         );
         votesTotalPayWorker[_jobId][_amount] += balanceOf(msg.sender, _jobId);
         if (votesTotalPayWorker[_jobId][_amount] * 1000 > minApproveQuorum * totalSupply[_jobId]) {
-            if (appointedDev[_jobId] != address(0)) {
-                unstakingFunction(jobFundingToken[_jobId], appointedDev[_jobId], _amount);
+            if (_amount >= jobTreasury[_jobId]) {
+                jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
+                jobRewardAmount[_jobId] = _amount;
+                fundingDeadline[_jobId] = block.timestamp + numberFundingDays * 1 days;
             } else {
-                gaangTreasury[appointedGaang[_jobId]][jobFundingToken[_jobId]] += _amount;
+                workerPaymentFunction(_jobId, _amount);
             }
             delete votesTotalPayWorker[_jobId][_amount];
         }
-        emit VotedToPayWorker(_jobId, jobFundingToken[_jobId], _amount);
+        emit VotedToPayWorker(_jobId, jobStatus[_jobId], jobFundingToken[_jobId], _amount);
     }
+
+    function requestPayment(
+        uint256 _jobId,
+        uint256 _amount,
+        uint256 _gaangNumber
+    ) {
+        require(
+            jobStatus[_jobId] == JobStatus.WORKING, 
+            "requestPayment: job funding still active"
+        );
+        if (_gaangNumber > 0) {
+            require(
+                isGaangMember[msg.sender][_gaangNumber], 
+                "requestPayment: not an appointed gaang member"
+            );
+        } else {
+            require(
+                msg.sender == appointedDev[_jobId], 
+                "requestPayment: not the appointed dev"
+            );
+        }
+        if (lastRequestForPayment[_jobId] == 0) {
+            lastRequestForPayment[_jobId] = block.timestamp;
+            amountToPay[_jobId] = _amount;
+        } else if (block.timestamp >= lastRequestForPayment[_jobId] + numberWithdrawPaymentDays * 1 days) {
+            workerPaymentFunction(_jobId, amountToPay[_jobId]);
+        }
+        emit RequestedPayment(_jobId, _amount);
+    }
+
+    
 
     function workerPaymentFunction(
         uint256 _jobId,
@@ -625,7 +657,8 @@ contract devGaangs {
         );
         updateUserContributionBalance(_jobId, msg.sender);
         if (appointedDev[_jobId] != address(0)) {
-            unstakingFunction(jobFundingToken[_jobId], appointedDev[_jobId], _amount);
+            unstakingFunction(jobFundingToken[_jobId], appointedDev[_jobId], _amount * (1 - devGaangsShare / 1000));
+            unstakingFunction(jobFundingToken[_jobId], devGaangsProtocolAddress, _amount * (devGaangsShare / 1000));
         } else {
             gaangTreasury[appointedGaang[_jobId]][jobFundingToken[_jobId]] += _amount;
         }
