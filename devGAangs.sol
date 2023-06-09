@@ -151,7 +151,8 @@ contract devGaangs {
             "cancelAndWithdraw: not a contributor"
         );
         require(
-            jobStatus[_jobId] = JobStatus.APPOINTING, 
+            jobStatus[_jobId] = JobStatus.APPOINTING ||
+            jobStatus[_jobId] == JobStatus.WORKING, 
             "cancelAndWithdraw: already active job"
         );
         jobStatus[_jobId] = JobStatus.CANCELLED;
@@ -171,7 +172,8 @@ contract devGaangs {
         );
         require(
             jobStatus[_jobId] == JobStatus.FUNDING && block.timestamp > numberCancelDays * 1 days + fundingDeadline[_jobId] ||
-            jobStatus[_jobId] == JobStatus.APPOINTING, 
+            jobStatus[_jobId] == JobStatus.APPOINTING ||
+            jobStatus[_jobId] == JobStatus.WORKING, 
             "voteToCancelFundingNewJob: cancelling not allowed"
         );
         votesTotalCancel[_jobId] += balanceOf(msg.sender, _jobId);
@@ -216,7 +218,7 @@ contract devGaangs {
     ) public {
         uint256 contribution;
         if (!collectiveJobFunding[_jobId]) {
-            contribution = userContributionToJobTreasury[_jobId][msg.sender];
+            contribution = jobTreasury[_jobId];
         } else {
             contribution = balanceOf(msg.sender, _jobId);
         }
@@ -394,26 +396,35 @@ contract devGaangs {
             userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
             "appointDevOrGaang: not a contributor"
         );
-        if (_appointedDev != address(0) && devProposal[_jobId][_appointedDev] > 0) {
+        require(
+            jobStatus[_jobId] == JobStatus.APPOINTING || 
+            jobStatus[_jobId] == JobStatus.WORKING, 
+            "appointDevOrGaang: job funding still active"
+        );
+        if (_appointedDev != address(0)) {
             if (devProposal[_jobId][_appointedDev] > jobTreasury[_jobId] + totalBidOnDev[_jobId][_appointedDev]) {
                 jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
                 jobRewardAmount[_jobId] = devProposal[_jobId][_appointedDev];
                 contributeFundingNewJob(_jobId, jobRewardAmount[_jobId]);
             } else if (devProposal[_jobId][_appointedDev] == jobTreasury[_jobId] + totalBidOnDev[_jobId][_appointedDev]) {
                 jobTreasury[_jobId] += totalBidOnGaang[_jobId][_apppointedGaang];
+                jobStatus[_jobId] = JobStatus.WORKING;
+            } else {
+                jobStatus[_jobId] = JobStatus.APPOINTING;
             }
             appointedDev[_jobId] = _appointedDev;
-        } else if (_apppointedGaang != 0 && gaangProposal[_jobId][_apppointedGaang] > 0) {
+        } else if (_apppointedGaang != 0) {
             if (gaangProposal[_jobId][_apppointedGaang] > jobTreasury[_jobId] + totalBidOnGaang[_jobId][_apppointedGaang]) {
                 jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
                 jobRewardAmount[_jobId] = gaangProposal[_jobId][_apppointedGaang];
                 contributeFundingNewJob(_jobId, jobRewardAmount[_jobId]);
             } else if (gaangProposal[_jobId][_apppointedGaang] == jobTreasury[_jobId] + totalBidOnGaang[_jobId][_apppointedGaang]) {
                 jobTreasury[_jobId] += totalBidOnGaang[_jobId][_apppointedGaang];
+                jobStatus[_jobId] = JobStatus.WORKING;
+            } else {
+                jobStatus[_jobId] = JobStatus.APPOINTING;
             }
             appointedGaang[_jobId] = _apppointedGaang;
-        } else {
-            return;
         }
         emit AcceptedDevOrGaangProposal(_jobId, msg.sender, jobStatus[_jobId]);
     }
@@ -432,7 +443,8 @@ contract devGaangs {
             "voteToAppointDevOrGaang: not a contributor"
         );
         require(
-            jobStatus[_jobId] == JobStatus.APPOINTING, 
+            jobStatus[_jobId] == JobStatus.APPOINTING || 
+            jobStatus[_jobId] == JobStatus.WORKING, 
             "voteToAppointDevOrGaang: job funding still active"
         );
         if (_appointedDev != address(0)) {
@@ -444,6 +456,9 @@ contract devGaangs {
                     fundingDeadline[_jobId] = block.timestamp + numberFundingDays * 1 days;
                 } else if (devProposal[_jobId][_appointedDev] == jobTreasury[_jobId] + totalBidOnDev[_jobId][_appointedDev]) {
                     jobTreasury[_jobId] += totalBidOnGaang[_jobId][_apppointedGaang];
+                    jobStatus[_jobId] = JobStatus.WORKING;
+                } else {
+                    jobStatus[_jobId] = JobStatus.APPOINTING;
                 }
                 appointedDev[_jobId] = _appointedDev;
                 delete votesTotalApproveDev[_jobId][_appointedDev];
@@ -457,6 +472,9 @@ contract devGaangs {
                     fundingDeadline[_jobId] = block.timestamp + numberFundingDays * 1 days;
                 } else if (gaangProposal[_jobId][_apppointedGaang] == jobTreasury[_jobId] + totalBidOnGaang[_jobId][_apppointedGaang]) {
                     jobTreasury[_jobId] += totalBidOnGaang[_jobId][_apppointedGaang];
+                    jobStatus[_jobId] = JobStatus.WORKING;
+                } else {
+                    jobStatus[_jobId] = JobStatus.APPOINTING;
                 }
                 appointedGaang[_jobId] = _apppointedGaang;
                 delete votesTotalApproveGaang[_jobId][_apppointedGaang];
