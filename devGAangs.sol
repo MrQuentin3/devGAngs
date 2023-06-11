@@ -31,6 +31,10 @@ contract devGaangs {
         uint256 _apppointedGaang,
         address _appointedDev
     ) public payable {
+        require(
+            jobStatus[_jobId] == JobStatus.INACTIVE, 
+            "proposeFundingNewJob: already active funding"
+        );
         jobId++;
         uint256 contribution;
         if (msg.value > 0) {
@@ -216,22 +220,27 @@ contract devGaangs {
     function withdrawUserContribution(
         uint256 _jobId
     ) public {
-        uint256 contribution;
-        if (!collectiveJobFunding[_jobId]) {
-            contribution = jobTreasury[_jobId];
-        } else {
-            contribution = balanceOf(msg.sender, _jobId);
-        }
         require(
-            contribution > 0 && !claimed[_jobId][msg.sender], 
-            "withdrawUserContribution: not a contributor"
-        );
-        require(
-            jobStatus[_jobId] == JobStatus.CANCELLED || jobStatus[_jobId] == JobStatus.SUCCESSFULEMPLOYERCHALLENGE, 
+            jobStatus[_jobId] == JobStatus.CANCELLED || jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE, 
             "withdrawUserContribution: job funding still active"
         );
-        if (jobStatus[_jobId] == JobStatus.SUCCESSFULEMPLOYERCHALLENGE && collectiveJobFunding[_jobId]) {
-            contribution = (contribution / totalSupply(_jobId)) * (arbitrageCompensation[_jobId] / 1000) * jobTreasury[_jobId];
+        uint256 contribution;
+        if (collectiveJobFunding[_jobId]) {
+            require(
+                balanceOf(msg.sender, _jobId) > 0 && !claimed[_jobId][msg.sender], 
+                "withdrawUserContribution: not a contributor"
+            );
+            if (jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE) {
+                contribution = (contribution / totalSupply(_jobId)) * (arbitrageForEmployer[_jobId] / 1000) * jobTreasury[_jobId];
+            } else {
+                contribution = (contribution / totalSupply(_jobId)) * jobTreasury[_jobId];
+            }
+        } else {
+            require(
+                userContributionToJobTreasury[_jobId][msg.sender] > 0, 
+                "withdrawUserContribution: not a contributor"
+            );
+            contribution = jobTreasury[_jobId];
         }
         unstakingFunction(jobFundingToken[_jobId], msg.sender, contribution);
         claimed[_jobId][msg.sender] = true;
@@ -245,6 +254,10 @@ contract devGaangs {
         address _tokenAddress, 
         address _appointedDev
     ) public payable {
+        require(
+            jobStatus[_jobId] == JobStatus.INACTIVE, 
+            "proposeNewJob: already active job"
+        );
         jobId++;
         if (_apppointedGaang != 0 || _appointedDev != address(0)) {
             if (appointedDev[jobId] != address(0)) {
@@ -603,7 +616,7 @@ contract devGaangs {
     function voteToPayWorker(
         uint256 _jobId,
         uint256 _amount
-    ) {
+    ) external {
         require(
             collectiveJobFunding[_jobId], 
             "voteToPayWorker: must be active job funding"
@@ -614,10 +627,10 @@ contract devGaangs {
         );
         require(
             jobStatus[_jobId] == JobStatus.WORKING, 
-            "voteToPayWorker: job funding still active"
+            "voteToPayWorker: not an active job"
         );
         votesTotalPayWorker[_jobId][_amount] += balanceOf(msg.sender, _jobId);
-        if (votesTotalPayWorker[_jobId][_amount] * 1000 > minApproveQuorum * totalSupply[_jobId]) {
+        if (votesTotalPayWorker[_jobId][_amount] * 1000 > minPayQuorum * totalSupply[_jobId]) {
             if (_amount >= jobTreasury[_jobId]) {
                 jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
                 jobRewardAmount[_jobId] = _amount;
@@ -634,9 +647,10 @@ contract devGaangs {
         uint256 _jobId,
         uint256 _amount,
         uint256 _gaangNumber
-    ) {
+    ) external {
         require(
-            jobStatus[_jobId] == JobStatus.WORKING, 
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE, 
             "requestPayment: job funding still active"
         );
         if (_gaangNumber > 0) {
@@ -650,16 +664,97 @@ contract devGaangs {
                 "requestPayment: not the appointed dev"
             );
         }
-        if (lastRequestForPayment[_jobId] == 0) {
+        if (jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE) {
+            workerPaymentFunction(_jobId, (1000 - arbitrageForEmployer[_jobId]) / 1000 * jobTreasury[_jobId]);
+        } else if (lastRequestForPayment[_jobId] == 0) {
+            require(
+                _amount >= jobTreasury[_jobId], 
+                "requestPayment: not enough treasury funds"
+            );
             lastRequestForPayment[_jobId] = block.timestamp;
             amountToPay[_jobId] = _amount;
         } else if (block.timestamp >= lastRequestForPayment[_jobId] + numberWithdrawPaymentDays * 1 days) {
+            if (amountToPay[_jobId] > jobTreasury[_jobId]) amountToPay[_jobId] = jobTreasury[_jobId];
             workerPaymentFunction(_jobId, amountToPay[_jobId]);
+        } else {
+            return;
         }
         emit RequestedPayment(_jobId, _amount);
     }
 
-    
+    function challenge(
+        uint256 _jobId,
+        uint256 _gaangNumber
+    ) external {
+        require(
+            !collectiveJobFunding[_jobId], 
+            "challenge: must be active job funding"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.APPOINTING, 
+            "challenge: job funding still active"
+        );
+        if (_gaangNumber > 0) {
+            require(
+                isGaangMember[msg.sender][_gaangNumber], 
+                "challenge: not an appointed gaang member"
+            );
+        } else {
+            require(
+                msg.sender == appointedDev[_jobId], 
+                "challenge: not the appointed dev"
+            );
+        } else {
+            require(
+                userContributionToJobTreasury[_jobId][msg.sender] > 0, 
+                "challenge: not the appointed dev"
+            );
+        }
+        jobStatus[_jobId] = JobStatus.CHALLENGED;
+        emit Challenged(_jobId, jobStatus[_jobId]);
+    }
+
+    function voteToChallenge(
+        uint256 _jobId
+    ) external {
+        require(
+            collectiveJobFunding[_jobId], 
+            "voteToChallenge: must be active job funding"
+        );
+        require(
+            balanceOf(msg.sender, _jobId) > 0, 
+            "voteToChallenge: not a contributor"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.APPOINTING, 
+            "voteToChallenge: not an active job"
+        );
+        votesTotalChallenge[_jobId][_amount] += balanceOf(msg.sender, _jobId);
+        if (votesTotalChallenge[_jobId][_amount] * 1000 > minChallengeQuorum * totalSupply[_jobId]) {
+            jobStatus[_jobId] = JobStatus.CHALLENGED;
+            delete votesTotalPayWorker[_jobId][_amount];
+        }
+        emit VotedToChallenge(_jobId, jobStatus[_jobId]);
+    }
+
+    function settleChallenge(
+        uint256 _jobId,
+        uint256 _arbitrageDecision
+    ) external {
+        require(
+            msg.sender == protocolOwner, 
+            "settleChallenge: must be active job funding"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.CHALLENGED, 
+            "settleChallenge: job funding still active"
+        );
+        arbitrageForEmployer[_jobId] = _arbitrageDecision;
+        jobStatus[_jobId] = JobStatus.SETTLEDCHALLENGE;
+        emit SettledChallenge(_jobId, _arbitrageDecision);
+    }
 
     function workerPaymentFunction(
         uint256 _jobId,
