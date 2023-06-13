@@ -230,6 +230,7 @@ contract devGaangs {
                 balanceOf(msg.sender, _jobId) > 0 && !claimed[_jobId][msg.sender], 
                 "withdrawUserContribution: not a contributor"
             );
+            updateUserTokenShare(_jobId, msg.sender);
             if (jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE) {
                 contribution = (contribution / totalSupply(_jobId)) * (arbitrageForEmployer[_jobId] / 1000) * jobTreasury[_jobId];
             } else {
@@ -629,6 +630,7 @@ contract devGaangs {
             jobStatus[_jobId] == JobStatus.WORKING, 
             "voteToPayWorker: not an active job"
         );
+        updateUserTokenShare(_jobId, msg.sender);
         votesTotalPayWorker[_jobId][_amount] += balanceOf(msg.sender, _jobId);
         if (votesTotalPayWorker[_jobId][_amount] * 1000 > minPayQuorum * totalSupply[_jobId]) {
             if (_amount >= jobTreasury[_jobId]) {
@@ -687,7 +689,8 @@ contract devGaangs {
         uint256 _gaangNumber
     ) external {
         require(
-            !collectiveJobFunding[_jobId], 
+            !collectiveJobFunding[_jobId] || 
+            collectiveJobFunding[_jobId] && msg.sender == jobMaster[_jobId], 
             "challenge: must be active job funding"
         );
         require(
@@ -731,6 +734,7 @@ contract devGaangs {
             jobStatus[_jobId] == JobStatus.APPOINTING, 
             "voteToChallenge: not an active job"
         );
+        updateUserTokenShare(_jobId, msg.sender);
         votesTotalChallenge[_jobId][_amount] += balanceOf(msg.sender, _jobId);
         if (votesTotalChallenge[_jobId][_amount] * 1000 > minChallengeQuorum * totalSupply[_jobId]) {
             jobStatus[_jobId] = JobStatus.CHALLENGED;
@@ -756,6 +760,97 @@ contract devGaangs {
         emit SettledChallenge(_jobId, _arbitrageDecision);
     }
 
+    function createGaang() external {
+        gaangId++;
+        gaangMember[gaangId][msg.sender] = true;
+        gaangHeadCount++;
+        emit CreatedGaang(gaangId);
+    }
+
+    function voteGaangPayment(
+        uint256 _gaangId,
+        uint256 _amountToPay,
+        address _tokenAddress,
+        address[] _paymentReceivers,
+        uint256[] _paymentPercentage
+    ) external {
+        require(
+            _amountToPay > gaangTreasury[_gaangId][_tokenAddress], 
+            "voteGaangPayment: must be higher than current gaang treasury"
+        );
+        require(
+            gaangMember[_gaangId][msg.sender], 
+            "voteGaangPayment: not a gaang member"
+        );
+        bytes32 memory hashVote = 
+            keccak256(
+                abi.encodePacked(
+                    _amountToPay,
+                    _tokenAddress,
+                    _paymentReceivers, 
+                    _paymentPercentage
+                )
+            )
+        votesTotalGaangPayment[_gaangId][hashVote]++;
+        if (votesTotalGaangPayment[_gaangId][hashVote] * 1000 > minGaangPaymentQuorum * gaangHeadCount) {
+            uint256 total;
+            for (uint i = 0; i < _paymentReceivers.length; i++) {
+                total += _paymentPercentage[i];
+            }
+            require(
+                total == 1000, 
+                "voteGaangPayment: payment percentage total not equal to 100%"
+            );
+            for (uint i = 0; i < _paymentReceivers.length; i++) {
+                unstakingFunction(_tokenAddress, _paymentReceivers[i], _paymentPercentage * _amountToPay);
+            }
+            delete votesTotalGaangPayment[_gaangId][hashVote];
+        }
+        emit VotedGaangPayment(_gaangId, _amountToPay, _tokenAddress);
+    }
+
+    function voteGaangAddMember(
+        uint256 _gaangId,
+        address _newMember
+    ) external {
+        require(
+            gaangMember[_gaangId][msg.sender], 
+            "voteGaangAddMember: not a gaang member"
+        );
+        require(
+            !gaangMember[_gaangId][_newMember], 
+            "voteGaangAddMember: already a gaang member"
+        );
+        votesTotalGaangAddMember[_gaangId][_newMember]++;
+        if (votesTotalGaangAddMember[_gaangId][_newMember] * 1000 > minGaangAddMemberQuorum * gaangHeadCount) {
+            gaangMember[_gaangId][_newMember] = true;
+            gaangHeadCount++;
+            delete votesTotalGaangAddMember[_gaangId][_newMember];
+        }
+        emit VotedGaangAddMember(_gaangId, _newMember);
+    }
+
+    function voteGaangRemoveMember(
+        uint256 _gaangId,
+        address _removedMember
+    ) external {
+        require(
+            gaangMember[_gaangId][msg.sender], 
+            "voteGaangRemoveMember: not a gaang member"
+        );
+        require(
+            gaangMember[_gaangId][_removedMember], 
+            "voteGaangRemoveMember: removed address not a gaang member"
+        );
+        votesTotalGaangRemoveMember[_gaangId][_removedMember]++;
+        if (votesTotalGaangRemoveMember[_gaangId][_removedMember] * 1000 > minGaangRemoveMemberQuorum * gaangHeadCount) {
+            delete gaangMember[_gaangId][_removedMember];
+            gaangHeadCount--;
+            delete votesTotalGaangRemoveMember[_gaangId][_removedMember];
+        }
+        emit VotedGaangRemoveMember(_gaangId, _removedMember);
+    }
+
     function workerPaymentFunction(
         uint256 _jobId,
         uint256 _amount
@@ -768,12 +863,11 @@ contract devGaangs {
             _amount >= jobTreasury[_jobId], 
             "workerPaymentFunction: not enough funds"
         );
-        updateUserContributionBalance(_jobId, msg.sender);
+        unstakingFunction(jobFundingToken[_jobId], devGaangsProtocolAddress, _amount * (devGaangsShare / 1000));
         if (appointedDev[_jobId] != address(0)) {
             unstakingFunction(jobFundingToken[_jobId], appointedDev[_jobId], _amount * (1 - devGaangsShare / 1000));
-            unstakingFunction(jobFundingToken[_jobId], devGaangsProtocolAddress, _amount * (devGaangsShare / 1000));
         } else {
-            gaangTreasury[appointedGaang[_jobId]][jobFundingToken[_jobId]] += _amount;
+            gaangTreasury[appointedGaang[_jobId]][jobFundingToken[_jobId]] += _amount * (devGaangsShare / 1000);
         }
         emit PaidWorker(_jobId, jobFundingToken[_jobId], _amount);
     }
@@ -868,23 +962,31 @@ contract devGaangs {
         } 
     }
 
-    function updateUserContributionBalance(
+    function updateUserTokenShare(
         uint256 _jobId,
         address _user
-    ) internal {
-        if (!userUpdatedBalance[_user]) {
-            if (appointedDev[_jobId] != address(0) && bidOnDev[_jobId][_user][appointedDev[_jobId]] > 0) {
-                userContributionToJobTreasury[_jobId][_user] += bidOnDev[_jobId][_user][appointedDev[_jobId]];
-                if (collectiveJobFunding[_jobId]) {
-                    _mint(_user, jobId, 1000 * bidOnDev[_jobId][_user][appointedDev[_jobId]], "");
-                }
-            } else if (appointedGaang[_jobId] != 0 && bidOnGaang[_jobId][_user][appointedGaang[_jobId]] > 0) {
-                userContributionToJobTreasury[_jobId][_user] += bidOnGaang[_jobId][_user][appointedGaang[_jobId]];
-                if (collectiveJobFunding[_jobId]) {
-                    _mint(_user, jobId, 1000 * bidOnGaang[_jobId][_user][appointedGaang[_jobId]], "");
-                }
+    ) public {
+        require(
+            collectiveJobFunding[_jobId], 
+            "updateUserTokenShare: must be an active job funding"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.FINALIZED ||
+            jobStatus[_jobId] == JobStatus.CHALLENGED ||
+            jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE, 
+            "updateUserContributionBalance: not appointed job funding"
+        );
+        if (appointedDev[_jobId] != address(0) && bidOnDev[_jobId][_user][appointedDev[_jobId]] > 0) {
+            userContributionToJobTreasury[_jobId][_user] += bidOnDev[_jobId][_user][appointedDev[_jobId]];
+            if (collectiveJobFunding[_jobId]) {
+                _mint(_user, jobId, 1000 * bidOnDev[_jobId][_user][appointedDev[_jobId]], "");
             }
-            userUpdatedBalance[_user] = true;
+        } else if (appointedGaang[_jobId] != 0 && bidOnGaang[_jobId][_user][appointedGaang[_jobId]] > 0) {
+            userContributionToJobTreasury[_jobId][_user] += bidOnGaang[_jobId][_user][appointedGaang[_jobId]];
+            if (collectiveJobFunding[_jobId]) {
+                _mint(_user, jobId, 1000 * bidOnGaang[_jobId][_user][appointedGaang[_jobId]], "");
+            }
         }
     }
 }
