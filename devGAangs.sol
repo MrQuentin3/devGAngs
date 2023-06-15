@@ -64,7 +64,7 @@ contract devGaangs {
             jobStatus[jobId] = JobStatus.FUNDING;
         }
         if (msg.sender == rootBlockOwner[_addToBlock]) {
-            headBlock[jobId] = _addToBlock;
+            jobBlock[jobId] = _addToBlock;
         } else {
             requestedAddBlock[_addToBlock][jobId] = true;
         }
@@ -284,7 +284,7 @@ contract devGaangs {
             return;
         }
         if (msg.sender == rootBlockOwner[_addToBlock]) {
-            headBlock[jobId] = _addToBlock;
+            jobBlock[jobId] = _addToBlock;
         } else {
             requestedAddBlock[_addToBlock][jobId] = true;
         }
@@ -503,8 +503,7 @@ contract devGaangs {
         uint256 _jobId,
         uint256 _gaangNumber,
         uint256 _askedRewardAmount,
-        uint256 _goodwillAmount,
-        uint256 _addToBlock
+        uint256 _goodwillAmount
     ) external payable {
         require(
             isGaangMember[msg.sender][_gaangNumber], 
@@ -539,11 +538,6 @@ contract devGaangs {
                 jobTreasury[_jobId] += totalBidOnDev[_jobId][msg.sender];
                 jobStatus[_jobId] = JobStatus.WORKING;
             }
-        }
-        if (msg.sender == rootBlockOwner[_addToBlock]) {
-            headBlock[_jobId] = _addToBlock;
-        } else {
-            requestedAddBlock[_addToBlock][_jobId] = true;
         }
         if (contribution > 0) committedGoodwill[msg.sender][_jobId] += _goodwillAmount;
         lastCommitOnJob[msg.sender][_jobId] = block.timestamp;
@@ -849,6 +843,70 @@ contract devGaangs {
             delete votesTotalGaangRemoveMember[_gaangId][_removedMember];
         }
         emit VotedGaangRemoveMember(_gaangId, _removedMember);
+    }
+
+    function acceptAddToBlockRequestOrPropose(
+        uint256 _blockId,
+        uint256 _jobId
+    ) external {
+        require(
+            msg.sender == rootBlockOwner[_blockId], 
+            "acceptAddToBlockRequestOrPropose: not the root block owner"
+        );
+        if (requestedAddBlock[_blockId][_jobId]) {
+            jobBlock[_jobId] = _blockId;
+            delete requestedAddBlock[_blockId][_jobId];
+        } else {
+            proposedAddBlock[_blockId][_jobId] = true;
+        }
+        emit AcceptedAddToBlockRequest(_blockId, _jobId);
+    }
+
+    function voteRequestOrAcceptAddToBlock(
+        uint256 _blockId,
+        uint256 _jobId
+    ) external {
+        require(
+            collectiveJobFunding[_jobId], 
+            "voteRequestOrAcceptAddToBlock: must be active job funding"
+        );
+        require(
+            balanceOf(msg.sender, _jobId) > 0, 
+            "voteRequestOrAcceptAddToBlock: not a contributor"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.FUNDING ||
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.APPOINTING, 
+            "voteRequestOrAcceptAddToBlock: not an active job"
+        );
+        updateUserTokenShare(_jobId, msg.sender);
+        votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId] += balanceOf(msg.sender, _jobId);
+        if (votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId] * 1000 > minRequestOrAcceptAddToBlockQuorum * totalSupply[_jobId]) {
+            if (proposedAddBlock[_blockId][_jobId]) {
+                jobBlock[_jobId] = _blockId;
+            } else {
+                requestedAddBlock[_blockId][_jobId] = true;
+            }
+            delete votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId];
+        }
+        emit VotedRequestOrAcceptAddToBlock(_blockId, _jobId);
+    }
+
+    function updateRootBlockOwner(
+        uint256 _blockId
+    ) external {
+        require(
+            msg.sender == rootBlockOwner[headBlock[_blockId]], 
+            "updateRootBlockOwner: not the root block owner"
+        );
+        require(
+            updatedBlock[headBlock[_blockId]], 
+            "updateRootBlockOwner: not the root block owner"
+        );
+        rootBlockOwner[_blockId] = msg.sender;
+        updatedBlock[_blockId] = true;
+        emit UpdatedRootBlockOwner(_blockId, msg.sender);
     }
 
     function workerPaymentFunction(
