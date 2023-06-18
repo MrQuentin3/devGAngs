@@ -167,11 +167,7 @@ contract devGaangs {
         uint256 _jobId
     ) external {
         require(
-            collectiveJobFunding[_jobId], 
-            "voteToCancelFundingNewJob: must be active job funding"
-        );
-        require(
-            userContributionToJobTreasury[_jobId][msg.sender] > 0, 
+            balanceOf(msg.sender, _jobId) > 0, 
             "voteToCancelFundingNewJob: not a contributor"
         );
         require(
@@ -193,16 +189,12 @@ contract devGaangs {
         address _proposedMaster
     ) external {
         require(
-            collectiveJobFunding[_jobId], 
-            "voteToChangeJobMaster: must be active job funding"
-        );
-        require(
-            userContributionToJobTreasury[_jobId][msg.sender] > 0, 
+            balanceOf(msg.sender, _jobId) > 0, 
             "voteToChangeJobMaster: not a contributor"
         );
         require(
-            userContributionToJobTreasury[_jobId][_proposedMaster] > 0, 
-            "voteToChangeJobMaster: not a contributor"
+            balanceOf(_proposedMaster, _jobId) > 0, 
+            "voteToChangeJobMaster: proposed job master not a contributor"
         );
         require(
             jobStatus[_jobId] != JobStatus.INACTIVE && 
@@ -283,10 +275,14 @@ contract devGaangs {
         } else { 
             return;
         }
-        if (msg.sender == rootBlockOwner[_addToBlock]) {
+        if (_addToBlock != address(0)) {
+            if (msg.sender == rootBlockOwner[_addToBlock]) {
             jobBlock[jobId] = _addToBlock;
+            } else {
+                requestedAddBlock[_addToBlock][jobId] = true;
+            }
         } else {
-            requestedAddBlock[_addToBlock][jobId] = true;
+            jobBlock[jobId] = blockId++;
         }
         _mint(msg.sender, jobId, 1000 * contribution, "");
         jobManager[jobId] = msg.sender;
@@ -449,10 +445,6 @@ contract devGaangs {
         address _appointedDev
     ) external {
         require(
-            collectiveJobFunding[_jobId], 
-            "voteToAppointDevOrGaang: must be active job funding"
-        );
-        require(
             balanceOf(msg.sender, _jobId) > 0, 
             "voteToAppointDevOrGaang: not a contributor"
         );
@@ -612,10 +604,6 @@ contract devGaangs {
         uint256 _jobId,
         uint256 _amount
     ) external {
-        require(
-            collectiveJobFunding[_jobId], 
-            "voteToPayWorker: must be active job funding"
-        );
         require(
             balanceOf(msg.sender, _jobId) > 0, 
             "voteToPayWorker: not a contributor"
@@ -845,40 +833,64 @@ contract devGaangs {
         emit VotedGaangRemoveMember(_gaangId, _removedMember);
     }
 
-    function acceptAddToBlockRequestOrPropose(
+    function acceptAddJobToBlockRequestOrPropose(
         uint256 _blockId,
         uint256 _jobId
     ) external {
+          require(
+            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            "acceptAddJobToBlockRequestOrPropose: not an active job"
+        );
         require(
-            msg.sender == rootBlockOwner[_blockId], 
-            "acceptAddToBlockRequestOrPropose: not the root block owner"
+            msg.sender == rootBlockOwner[_blockId] && updatedBlock[_blockId], 
+            "acceptAddJobToBlockRequestOrPropose: not the root block owner"
         );
         if (requestedAddBlock[_blockId][_jobId]) {
             jobBlock[_jobId] = _blockId;
             delete requestedAddBlock[_blockId][_jobId];
         } else {
-            proposedAddBlock[_blockId][_jobId] = true;
+            if (collectiveJobFunding[_jobId] || 
+                !collectiveJobFunding[_jobId] && userContributionToJobTreasury[_jobId][msg.sender] == 0
+            ) {
+                proposedAddBlock[_blockId][_jobId] = true;
+            } else {
+                jobBlock[_jobId] = _blockId;
+            }
         }
         emit AcceptedAddToBlockRequest(_blockId, _jobId);
     }
 
-    function voteRequestOrAcceptAddToBlock(
+    function requestOrAcceptAddJobToBlock(
         uint256 _blockId,
         uint256 _jobId
     ) external {
         require(
-            collectiveJobFunding[_jobId], 
-            "voteRequestOrAcceptAddToBlock: must be active job funding"
+            userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
+            "requestOrAcceptAddJobToBlock: not a contributor"
         );
+        require(
+            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            "requestOrAcceptAddJobToBlock: not an active job"
+        );
+        if (proposedAddBlock[_blockId][_jobId]) {
+            jobBlock[_jobId] = _blockId;
+        } else {
+            requestedAddBlock[_blockId][_jobId] = true;
+        }
+        emit RequestedOrAcceptedAddJobToBlock(_blockId, _jobId);
+    }
+
+    function voteRequestOrAcceptAddJobToBlock(
+        uint256 _blockId,
+        uint256 _jobId
+    ) external {
         require(
             balanceOf(msg.sender, _jobId) > 0, 
-            "voteRequestOrAcceptAddToBlock: not a contributor"
+            "voteRequestOrAcceptAddJobToBlock: not a contributor"
         );
         require(
-            jobStatus[_jobId] == JobStatus.FUNDING ||
-            jobStatus[_jobId] == JobStatus.WORKING ||
-            jobStatus[_jobId] == JobStatus.APPOINTING, 
-            "voteRequestOrAcceptAddToBlock: not an active job"
+            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            "voteRequestOrAcceptAddJobToBlock: not an active job"
         );
         updateUserTokenShare(_jobId, msg.sender);
         votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId] += balanceOf(msg.sender, _jobId);
@@ -890,24 +902,192 @@ contract devGaangs {
             }
             delete votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId];
         }
-        emit VotedRequestOrAcceptAddToBlock(_blockId, _jobId);
+        emit VotedRequestOrAcceptAddJobToBlock(_blockId, _jobId);
+    }
+
+    function acceptAddToBlockRequestOrPropose(
+        uint256 _blockIdFrom,
+        uint256 _blockIdTo
+    ) external {
+        require(
+            msg.sender == rootBlockOwner[_blockIdFrom] && updatedBlock[_blockIdFrom], 
+            "acceptAddToBlockRequestOrPropose: not the root block owner"
+        );
+        if (requestedAddBlockToAnother[_blockIdTo][_blockIdFrom]) {
+            headBlock[_blockIdTo] = _blockIdFrom;
+            outChained[_blockIdTo] = true;
+            delete requestedAddBlockToAnother[_blockIdTo][_blockIdFrom];
+        } else {
+            if (rootBlockOwner[_blockIdTo] == msg.sender && updatedBlock[_blockIdTo]) {
+                headBlock[_blockIdTo] = _blockIdFrom;
+                delete outChained[_blockIdTo];
+            } else {
+                proposedAddBlockToAnother[_blockIdFrom][_blockIdTo] = true;
+            }
+        }
+        emit AcceptedAddToBlockRequest(_blockIdFrom, _blockIdTo);
+    }
+
+    function requestOrAcceptAddToBlock(
+        uint256 _blockIdFrom,
+        uint256 _blockIdTo
+    ) external {
+          require(
+            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            "requestOrAcceptAddToBlock: not an active job"
+        );
+        require(
+            msg.sender == rootBlockOwner[_blockIdFrom] && updatedBlock[_blockIdFrom], 
+            "requestOrAcceptAddToBlock: not the root block owner"
+        );
+        if (proposedAddBlock[_blockIdTo][_blockIdFrom]) {
+            headBlock[_blockIdFrom] = _blockIdTo;
+            outChained[_blockIdFrom] = true;
+            delete proposedAddBlock[_blockIdTo][_blockIdFrom];
+        } else {
+            if (rootBlockOwner[_blockIdTo] == msg.sender && updatedBlock[_blockIdTo]) {
+                headBlock[_blockIdFrom] = _blockIdTo;
+                delete outChained[_blockIdFrom];
+            } else {
+                requestedAddBlock[_blockIdFrom][_blockIdTo] = true;
+            }
+        }
+        emit AcceptedAddToBlockRequest(_blockId, _jobId);
     }
 
     function updateRootBlockOwner(
         uint256 _blockId
     ) external {
-        require(
-            msg.sender == rootBlockOwner[headBlock[_blockId]], 
-            "updateRootBlockOwner: not the root block owner"
-        );
-        require(
-            updatedBlock[headBlock[_blockId]], 
-            "updateRootBlockOwner: not the root block owner"
-        );
-        rootBlockOwner[_blockId] = msg.sender;
+        if (outChained[_blockId]) {
+            require(
+                msg.sender == rootBlockOwner[_blockId], 
+                "updateRootBlockOwner: not the root block owner"
+            );
+        } else if (headBlock[_blockId] != 0) {
+            require(
+                msg.sender == rootBlockOwner[headBlock[_blockId]], 
+                "updateRootBlockOwner: not the root block owner"
+            );
+            require(
+                updatedBlock[headBlock[_blockId]], 
+                "updateRootBlockOwner: not updated root block owner"
+            );
+            rootBlockOwner[_blockId] = msg.sender;
+        }
         updatedBlock[_blockId] = true;
-        emit UpdatedRootBlockOwner(_blockId, msg.sender);
+        emit UpdatedRootBlockOwner(_blockId);
     }
+
+    function batchUpdateRootBlockOwner(
+        uint256[] _blockId
+    ) external {
+        for (uint i = 0; i < _blockId.length; i++) {
+            updateRootBlockOwner(_blockId[i]);
+        }
+    }
+
+    function updateRootBlockOwnerPrice(
+        uint256 _blockId,
+        uint256 _new
+    ) external {
+        require(
+            updatedBlock[_blockId] && msg.sender == rootBlockOwner[_blockId], 
+            "updateRootBlockOwnerPrice: not the root block owner"
+        );
+        require(
+            headBlock[_blockId] == 0 ||
+            headBlock[_blockId] != 0 && rootBlockOwner[headBlock[_blockId]] != msg.sender, 
+            "updateRootBlockOwnerPrice: the block is not the headblock"
+        );
+        rootBlockOwnerPrice[_blockId] = _new;
+        emit UpdatedRootBlockOwnerPrice(_blockId, _new);
+    }
+
+    function updateBlockOwnerPrice(
+        uint256 _blockId,
+        uint256 _new
+    ) external {
+        require(
+            updatedBlock[_blockId] && msg.sender == rootBlockOwner[_blockId], 
+            "updateRootBlockOwnerPrice: not the root block owner"
+        );
+        require(
+            headBlock[_blockId] != 0 &&
+            rootBlockOwner[headBlock[_blockId]] == msg.sender, 
+            "updateRootBlockOwnerPrice: the block is not the headblock"
+        );
+        blockOwnerPrice[_blockId] = _new;
+        emit UpdatedBlockOwnerPrice(_blockId, _new);
+    }
+
+    function updateOwnerPrice(
+        uint256 _jobId,
+        uint256 _new
+    ) external {
+        require(
+            balanceOf(msg.sender, _jobId) > 0, 
+            "updateOwnerPrice: sender not an owner of the asset"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.FINALIZED, 
+            "updateOwnerPrice: auction live cannot update price"
+        );
+        uint256 old = ownerPrices[_jobId][msg.sender];
+        require(
+            _new != old, 
+            "updateOwnerPrice: not an update"
+        );
+        uint256 weight = balanceOf(msg.sender, _jobId);
+
+        if (votingTokens == 0) {
+            votingTokens[_jobId] = weight;
+            reserveTotal[_jobId] = weight * _new;
+        }
+        // they are the only one voting
+        else if (weight == votingTokens && old != 0) {
+            reserveTotal[_jobId] = weight * _new;
+        }
+        // previously they were not voting
+        else if (old == 0) {
+            uint256 averageReserve = reserveTotal / votingTokens;
+            uint256 reservePriceMin = averageReserve * minReserveFactor / 1000;
+            require(
+                _new >= reservePriceMin, 
+                "updateOwnerPrice: reserve price too low"
+            );
+            uint256 reservePriceMax = averageReserve * maxReserveFactor / 1000;
+            require(
+                _new <= reservePriceMax, 
+                "updateOwnerPrice: reserve price too high"
+            );
+            votingTokens[_jobId] += weight;
+            reserveTotal[_jobId] += weight * _new;
+        }
+        // they no longer want to vote
+        else if (_new == 0) {
+            votingTokens[_jobId] -= weight;
+            reserveTotal[_jobId] -= weight * old;
+        }
+        // they are updating their vote
+        else {
+            uint256 averageReserve = (reserveTotal[_jobId] - (old * weight)) / (votingTokens[_jobId] - weight);
+            uint256 reservePriceMin = averageReserve * minReserveFactor / 1000;
+            require(
+                _new >= reservePriceMin, 
+                "updateOwnerPrice: reserve price too low"
+            );
+            uint256 reservePriceMax = averageReserve * maxReserveFactor / 1000;
+            require(
+                _new <= reservePriceMax, 
+                "updateOwnerPrice: reserve price too high"
+            );
+            reserveTotal[_jobId] = reserveTotal[_jobId] + (weight * _new) - (weight * old);
+        }
+        ownerPrices[_jobId][msg.sender] = _new;
+        emit UpdatedUserPrice(msg.sender, _new);
+    }
+
+
 
     function workerPaymentFunction(
         uint256 _jobId,
