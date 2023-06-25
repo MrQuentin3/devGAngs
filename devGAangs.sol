@@ -63,10 +63,12 @@ contract devGaangs {
         } else {
             jobStatus[jobId] = JobStatus.FUNDING;
         }
-        if (msg.sender == rootBlockOwner[_addToBlock]) {
-            jobBlock[jobId] = _addToBlock;
-        } else {
-            requestedAddBlock[_addToBlock][jobId] = true;
+        if (_addToBlock != 0) {
+            if (msg.sender == rootBlockOwner[_addToBlock]) {
+                devBlock[jobId] = _addToBlock;
+            } else {
+                requestedAddBlock[_addToBlock][jobId] = true;
+            }
         }
         _mint(msg.sender, jobId, 1000 * contribution, "");
         collectiveJobFunding[jobId] = true;
@@ -241,16 +243,13 @@ contract devGaangs {
     }
 
     function proposeNewJob(
+        uint256 _chain,
         uint256 _addToBlock,
         uint256 _amount,
         uint256 _apppointedGaang,
         address _tokenAddress, 
         address _appointedDev
     ) public payable {
-        require(
-            jobStatus[_jobId] == JobStatus.INACTIVE, 
-            "proposeNewJob: already active job"
-        );
         jobId++;
         if (_apppointedGaang != 0 || _appointedDev != address(0)) {
             if (appointedDev[jobId] != address(0)) {
@@ -277,12 +276,17 @@ contract devGaangs {
         }
         if (_addToBlock != address(0)) {
             if (msg.sender == rootBlockOwner[_addToBlock]) {
-            jobBlock[jobId] = _addToBlock;
+                devBlock[jobId] = _addToBlock;
             } else {
                 requestedAddBlock[_addToBlock][jobId] = true;
             }
         } else {
-            jobBlock[jobId] = blockId++;
+            devBlock[jobId] = blockId++;
+            if (_chain != 0) {
+                chainNumber[blockId] = _chain;
+            } else {
+                chainNumber[blockId] = chainId++;
+            }
         }
         _mint(msg.sender, jobId, 1000 * contribution, "");
         jobManager[jobId] = msg.sender;
@@ -298,17 +302,18 @@ contract devGaangs {
         uint256[] _amount,
         uint256[] _apppointedGaang,
         address[] _tokenAddress, 
-        address[] _appointedDev
+        address[] _appointedDev,
+        bool[] _hereditary
     ) external payable {
         require(
-            _addToBlock.length == _rewardAmount.length == _amount.length == _apppointedGaang.length == _tokenAddress.length == _appointedDev.length, 
+            _addToBlock.length == _rewardAmount.length == _amount.length == _apppointedGaang.length == _tokenAddress.length == _appointedDev.length == _hereditary.length, 
             "batchProposeNewJob: wrong parameters length"
         );
         for (uint i = 0; i < _rewardAmount.length; i++) {
             if (_rewardAmount[i] > 0) {
                 proposeFundingNewJob(_addToBlock[i], _rewardAmount[i], _amount[i], _tokenAddress[i], _apppointedGaang[i], _appointedDev[i]);
             } else {
-                proposeNewJob(_addToBlock[i], _amount[i], _apppointedGaang[i], _tokenAddress[i], _appointedDev[i]);
+                proposeNewJob(_addToBlock[i], _amount[i], _apppointedGaang[i], _tokenAddress[i], _appointedDev[i], _hereditary[i]);
             }
         }
     }   
@@ -833,126 +838,136 @@ contract devGaangs {
         emit VotedGaangRemoveMember(_gaangId, _removedMember);
     }
 
-    function acceptAddJobToBlockRequestOrPropose(
+    function acceptJobPushRequestOrPullRequest(
         uint256 _blockId,
         uint256 _jobId
     ) external {
           require(
             jobStatus[_jobId] != JobStatus.INACTIVE, 
-            "acceptAddJobToBlockRequestOrPropose: not an active job"
+            "acceptJobPushRequestOrPullRequest: not an active job"
         );
         require(
             msg.sender == rootBlockOwner[_blockId] && updatedBlock[_blockId], 
-            "acceptAddJobToBlockRequestOrPropose: not the root block owner"
+            "acceptJobPushRequestOrPullRequest: not the root block owner"
         );
-        if (requestedAddBlock[_blockId][_jobId]) {
-            jobBlock[_jobId] = _blockId;
-            delete requestedAddBlock[_blockId][_jobId];
+        if (jobPushRequest[_blockId][_jobId]) {
+            devBlock[_jobId] = _blockId;
+            delete jobPushRequest[_blockId][_jobId];
         } else {
             if (collectiveJobFunding[_jobId] || 
                 !collectiveJobFunding[_jobId] && userContributionToJobTreasury[_jobId][msg.sender] == 0
             ) {
-                proposedAddBlock[_blockId][_jobId] = true;
+                jobPullRequest[_blockId][_jobId] = true;
             } else {
-                jobBlock[_jobId] = _blockId;
+                devBlock[_jobId] = _blockId;
             }
         }
-        emit AcceptedAddToBlockRequest(_blockId, _jobId);
+        emit AcceptedJobPushRequestOrPulledRequest(_blockId, _jobId);
     }
 
-    function requestOrAcceptAddJobToBlock(
+    function acceptJobPullRequestOrPushRequest(
         uint256 _blockId,
         uint256 _jobId
     ) external {
         require(
             userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
-            "requestOrAcceptAddJobToBlock: not a contributor"
+            "acceptJobPullRequestOrPushRequest: not a contributor"
         );
         require(
             jobStatus[_jobId] != JobStatus.INACTIVE, 
-            "requestOrAcceptAddJobToBlock: not an active job"
+            "acceptJobPullRequestOrPushRequest: not an active job"
         );
-        if (proposedAddBlock[_blockId][_jobId]) {
-            jobBlock[_jobId] = _blockId;
+        if (jobPullRequest[_blockId][_jobId]) {
+            devBlock[_jobId] = _blockId;
         } else {
-            requestedAddBlock[_blockId][_jobId] = true;
+            jobPushRequest[_blockId][_jobId] = true;
         }
-        emit RequestedOrAcceptedAddJobToBlock(_blockId, _jobId);
+        emit AcceptedJobPullRequestOrPushedRequest(_blockId, _jobId);
     }
 
-    function voteRequestOrAcceptAddJobToBlock(
+    function voteAcceptJobPullRequestOrPushRequest(
         uint256 _blockId,
         uint256 _jobId
     ) external {
         require(
             balanceOf(msg.sender, _jobId) > 0, 
-            "voteRequestOrAcceptAddJobToBlock: not a contributor"
+            "voteAcceptJobPullRequestOrPushRequest: not a contributor"
         );
         require(
             jobStatus[_jobId] != JobStatus.INACTIVE, 
-            "voteRequestOrAcceptAddJobToBlock: not an active job"
+            "voteAcceptJobPullRequestOrPushRequest: not an active job"
         );
         updateUserTokenShare(_jobId, msg.sender);
-        votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId] += balanceOf(msg.sender, _jobId);
-        if (votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId] * 1000 > minRequestOrAcceptAddToBlockQuorum * totalSupply[_jobId]) {
-            if (proposedAddBlock[_blockId][_jobId]) {
-                jobBlock[_jobId] = _blockId;
+        votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] += balanceOf(msg.sender, _jobId);
+        if (votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] * 1000 > minJobPullRequestOrPushRequestQuorum * totalSupply[_jobId]) {
+            if (jobPullRequest[_blockId][_jobId]) {
+                devBlock[_jobId] = _blockId;
             } else {
-                requestedAddBlock[_blockId][_jobId] = true;
+                jobPushRequest[_blockId][_jobId] = true;
             }
-            delete votesTotalRequestOrAcceptAddToBlock[_jobId][_blockId];
+            delete votesTotalJobPullRequestOrPushRequest[_jobId][_blockId];
         }
-        emit VotedRequestOrAcceptAddJobToBlock(_blockId, _jobId);
+        emit VotedAcceptJobPullRequestOrPushRequest(_blockId, _jobId);
     }
 
-    function acceptAddToBlockRequestOrPropose(
+    function acceptBlockPushRequestOrPullRequest(
         uint256 _blockIdFrom,
         uint256 _blockIdTo
     ) external {
         require(
-            msg.sender == rootBlockOwner[_blockIdFrom] && updatedBlock[_blockIdFrom], 
-            "acceptAddToBlockRequestOrPropose: not the root block owner"
+            msg.sender == rootBlockOwner[_blockIdFrom] && 
+            blockUpdateIndex[_blockIdFrom] == chainUpdateIndex[chainNumber[_blockIdFrom]], 
+            "acceptBlockPushRequestOrPullRequest: not the root block owner"
         );
-        if (requestedAddBlockToAnother[_blockIdTo][_blockIdFrom]) {
+        if (blockPushRequest[_blockIdTo][_blockIdFrom]) {
             headBlock[_blockIdTo] = _blockIdFrom;
             outChained[_blockIdTo] = true;
-            delete requestedAddBlockToAnother[_blockIdTo][_blockIdFrom];
+            delete blockPushRequest[_blockIdTo][_blockIdFrom];
+            chainNumber[_blockIdTo] = chainNumber[_blockIdFrom];
+            chainUpdateIndex[chainNumber[_blockIdFrom]]++;
         } else {
-            if (rootBlockOwner[_blockIdTo] == msg.sender && updatedBlock[_blockIdTo]) {
+            if (rootBlockOwner[_blockIdTo] == msg.sender && 
+                blockUpdateIndex[_blockIdTo] == chainUpdateIndex[chainNumber[_blockIdTo]]
+            ) {
                 headBlock[_blockIdTo] = _blockIdFrom;
                 delete outChained[_blockIdTo];
             } else {
-                proposedAddBlockToAnother[_blockIdFrom][_blockIdTo] = true;
+                blockPullRequest[_blockIdFrom][_blockIdTo] = true;
             }
         }
-        emit AcceptedAddToBlockRequest(_blockIdFrom, _blockIdTo);
+        emit AcceptedBlockPushRequestOrPullRequest(_blockIdFrom, _blockIdTo);
     }
 
-    function requestOrAcceptAddToBlock(
+    function acceptBlockPullRequestOrPushRequest(
         uint256 _blockIdFrom,
         uint256 _blockIdTo
     ) external {
           require(
             jobStatus[_jobId] != JobStatus.INACTIVE, 
-            "requestOrAcceptAddToBlock: not an active job"
+            "acceptBlockPullRequestOrPushRequest: not an active job"
         );
         require(
-            msg.sender == rootBlockOwner[_blockIdFrom] && updatedBlock[_blockIdFrom], 
-            "requestOrAcceptAddToBlock: not the root block owner"
+            msg.sender == rootBlockOwner[_blockIdFrom] && 
+            blockUpdateIndex[_blockIdFrom] == chainUpdateIndex[chainNumber[_blockIdFrom]], 
+            "acceptBlockPullRequestOrPushRequest: not the root block owner"
         );
-        if (proposedAddBlock[_blockIdTo][_blockIdFrom]) {
+        if (blockPullRequest[_blockIdTo][_blockIdFrom]) {
             headBlock[_blockIdFrom] = _blockIdTo;
             outChained[_blockIdFrom] = true;
-            delete proposedAddBlock[_blockIdTo][_blockIdFrom];
+            delete blockPullRequest[_blockIdTo][_blockIdFrom];
+            chainNumber[_blockIdFrom] = chainNumber[_blockIdTo];
+            chainUpdateIndex[chainNumber[_blockIdFrom]]++;
         } else {
-            if (rootBlockOwner[_blockIdTo] == msg.sender && updatedBlock[_blockIdTo]) {
+            if (rootBlockOwner[_blockIdTo] == msg.sender && 
+                blockUpdateIndex[_blockIdTo] == chainUpdateIndex[chainNumber[_blockIdTo]]
+            ) {
                 headBlock[_blockIdFrom] = _blockIdTo;
                 delete outChained[_blockIdFrom];
             } else {
-                requestedAddBlock[_blockIdFrom][_blockIdTo] = true;
+                blockPushRequest[_blockIdFrom][_blockIdTo] = true;
             }
         }
-        emit AcceptedAddToBlockRequest(_blockId, _jobId);
+        emit AcceptedBlockPullRequestOrPushRequest(_blockId, _jobId);
     }
 
     function updateRootBlockOwner(
@@ -969,12 +984,13 @@ contract devGaangs {
                 "updateRootBlockOwner: not the root block owner"
             );
             require(
-                updatedBlock[headBlock[_blockId]], 
+                blockUpdateIndex[headBlock[_blockId]] == chainUpdateIndex[chainNumber[headBlock[_blockId]]], 
                 "updateRootBlockOwner: not updated root block owner"
             );
+            chainNumber[_blockId] = chainNumber[headBlock[_blockId]];
             rootBlockOwner[_blockId] = msg.sender;
         }
-        updatedBlock[_blockId] = true;
+        blockUpdateIndex[_blockId] = chainUpdateIndex[chainNumber[_blockId]];
         emit UpdatedRootBlockOwner(_blockId);
     }
 
@@ -986,29 +1002,13 @@ contract devGaangs {
         }
     }
 
-    function updateRootBlockOwnerPrice(
-        uint256 _blockId,
-        uint256 _new
-    ) external {
-        require(
-            updatedBlock[_blockId] && msg.sender == rootBlockOwner[_blockId], 
-            "updateRootBlockOwnerPrice: not the root block owner"
-        );
-        require(
-            headBlock[_blockId] == 0 ||
-            headBlock[_blockId] != 0 && rootBlockOwner[headBlock[_blockId]] != msg.sender, 
-            "updateRootBlockOwnerPrice: the block is not the headblock"
-        );
-        rootBlockOwnerPrice[_blockId] = _new;
-        emit UpdatedRootBlockOwnerPrice(_blockId, _new);
-    }
-
     function updateBlockOwnerPrice(
         uint256 _blockId,
         uint256 _new
     ) external {
         require(
-            updatedBlock[_blockId] && msg.sender == rootBlockOwner[_blockId], 
+            blockUpdateIndex[_blockId] == chainUpdateIndex[chainNumber[_blockId]] && 
+            msg.sender == rootBlockOwner[_blockId], 
             "updateRootBlockOwnerPrice: not the root block owner"
         );
         require(
