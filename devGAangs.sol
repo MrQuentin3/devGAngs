@@ -73,7 +73,7 @@ contract devGaangs {
         _mint(msg.sender, jobId, 1000 * contribution, "");
         collectiveJobFunding[jobId] = true;
         fundingDeadline[jobId] = block.timestamp + numberFundingDays * 1 days;
-        jobManager[jobId] = msg.sender;
+        jobMaster[jobId] = msg.sender;
         jobTreasury[jobId] += contribution;
         userContributionToJobTreasury[jobId][msg.sender] += contribution;
         jobRewardAmount[jobId] = _rewardAmount;
@@ -140,7 +140,7 @@ contract devGaangs {
             "updateFundingNewJob: funding deadline expired"
         );
         require(
-            jobManager[_jobId] == msg.sender, 
+            jobMaster[_jobId] == msg.sender, 
             "updateFundingNewJob: must be the job initiator"
         );
         require(
@@ -153,7 +153,7 @@ contract devGaangs {
 
     function cancelAndWithdraw(uint256 _jobId) external {
         require(
-            userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
+            jobMaster[_jobId] == msg.sender && !collectiveJobFunding[_jobId], 
             "cancelAndWithdraw: not a contributor"
         );
         require(
@@ -232,7 +232,7 @@ contract devGaangs {
             }
         } else {
             require(
-                userContributionToJobTreasury[_jobId][msg.sender] > 0, 
+                jobMaster[_jobId] == msg.sender, 
                 "withdrawUserContribution: not a contributor"
             );
             contribution = jobTreasury[_jobId];
@@ -289,7 +289,7 @@ contract devGaangs {
             }
         }
         _mint(msg.sender, jobId, 1000 * contribution, "");
-        jobManager[jobId] = msg.sender;
+        jobMaster[jobId] = msg.sender;
         jobTreasury[jobId] += contribution;
         userContributionToJobTreasury[jobId][msg.sender] += contribution;
         jobRewardAmount[jobId] = _amount;
@@ -327,6 +327,11 @@ contract devGaangs {
         require(
             jobStatus[_jobId] == JobStatus.APPOINTING,
             "bidOnDevOrGaang: cannot bid"
+        );
+        require(
+            jobMaster[_jobId] == msg.sender && !collectiveJobFunding[_jobId] ||
+            balanceOf(msg.sender, _jobId) > 0, 
+            "bidOnDevOrGaang: not a contributor or job owner"
         );
         uint256 contribution;
         if (msg.value > 0 && jobFundingToken[_jobId] == address(0)) {
@@ -408,7 +413,7 @@ contract devGaangs {
         address _appointedDev
     ) external payable {
         require(
-            userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
+            jobMaster[_jobId] == msg.sender && !collectiveJobFunding[_jobId], 
             "appointDevOrGaang: not a contributor"
         );
         require(
@@ -593,7 +598,7 @@ contract devGaangs {
             "payWorker: no work ongoing"
         );
         require(
-            userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
+            jobMaster[_jobId] == msg.sender && !collectiveJobFunding[_jobId], 
             "payWorker: not a contributor"
         );
         if (_amount >= jobTreasury[_jobId]) {
@@ -676,11 +681,6 @@ contract devGaangs {
         uint256 _gaangNumber
     ) external {
         require(
-            !collectiveJobFunding[_jobId] || 
-            collectiveJobFunding[_jobId] && msg.sender == jobMaster[_jobId], 
-            "challenge: must be active job funding"
-        );
-        require(
             jobStatus[_jobId] == JobStatus.WORKING ||
             jobStatus[_jobId] == JobStatus.APPOINTING, 
             "challenge: job funding still active"
@@ -697,8 +697,9 @@ contract devGaangs {
             );
         } else {
             require(
-                userContributionToJobTreasury[_jobId][msg.sender] > 0, 
-                "challenge: not the appointed dev"
+                !collectiveJobFunding[_jobId] && jobMaster[_jobId] == msg.sender ||
+                collectiveJobFunding[_jobId] && msg.sender == jobMaster[_jobId], 
+                "challenge: must be a job Master"
             );
         }
         jobStatus[_jobId] = JobStatus.CHALLENGED;
@@ -854,7 +855,8 @@ contract devGaangs {
             devBlock[_jobId] = _blockId;
             delete jobPushRequest[_blockId][_jobId];
         } else {
-            if (collectiveJobFunding[_jobId] || 
+            if (
+                collectiveJobFunding[_jobId] || 
                 !collectiveJobFunding[_jobId] && userContributionToJobTreasury[_jobId][msg.sender] == 0
             ) {
                 jobPullRequest[_blockId][_jobId] = true;
@@ -870,7 +872,7 @@ contract devGaangs {
         uint256 _jobId
     ) external {
         require(
-            userContributionToJobTreasury[_jobId][msg.sender] > 0 && !collectiveJobFunding[_jobId], 
+            jobMaster[_jobId] == msg.sender && !collectiveJobFunding[_jobId], 
             "acceptJobPullRequestOrPushRequest: not a contributor"
         );
         require(
@@ -879,8 +881,14 @@ contract devGaangs {
         );
         if (jobPullRequest[_blockId][_jobId]) {
             devBlock[_jobId] = _blockId;
-        } else {
+            delete jobPullRequest[_blockId][_jobId];
+        } else if (
+            collectiveJobFunding[_jobId] || 
+            !collectiveJobFunding[_jobId] && userContributionToJobTreasury[_jobId][msg.sender] == 0
+        ) {
             jobPushRequest[_blockId][_jobId] = true;
+        } else {
+            devBlock[_jobId] = _blockId;
         }
         emit AcceptedJobPullRequestOrPushedRequest(_blockId, _jobId);
     }
@@ -902,8 +910,14 @@ contract devGaangs {
         if (votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] * 1000 > minJobPullRequestOrPushRequestQuorum * totalSupply[_jobId]) {
             if (jobPullRequest[_blockId][_jobId]) {
                 devBlock[_jobId] = _blockId;
-            } else {
+                delete jobPullRequest[_blockId][_jobId];
+            } else if (
+                collectiveJobFunding[_jobId] || 
+                !collectiveJobFunding[_jobId] && userContributionToJobTreasury[_jobId][msg.sender] == 0
+            ) {
                 jobPushRequest[_blockId][_jobId] = true;
+            } else {
+                devBlock[_jobId] = _blockId;
             }
             delete votesTotalJobPullRequestOrPushRequest[_jobId][_blockId];
         }
@@ -926,7 +940,8 @@ contract devGaangs {
             chainNumber[_blockIdTo] = chainNumber[_blockIdFrom];
             chainUpdateIndex[chainNumber[_blockIdFrom]]++;
         } else {
-            if (rootBlockOwner[_blockIdTo] == msg.sender && 
+            if (
+                rootBlockOwner[_blockIdTo] == msg.sender && 
                 blockUpdateIndex[_blockIdTo] == chainUpdateIndex[chainNumber[_blockIdTo]]
             ) {
                 headBlock[_blockIdTo] = _blockIdFrom;
@@ -988,7 +1003,10 @@ contract devGaangs {
                 "updateRootBlockOwner: not updated root block owner"
             );
             chainNumber[_blockId] = chainNumber[headBlock[_blockId]];
-            rootBlockOwner[_blockId] = msg.sender;
+            if (rootBlockOwner[_blockId] != msg.sender) {
+                previousRootBlockOwner[_blockId] = rootBlockOwner[_blockId];
+                rootBlockOwner[_blockId] = msg.sender;
+            }
         }
         blockUpdateIndex[_blockId] = chainUpdateIndex[chainNumber[_blockId]];
         emit UpdatedRootBlockOwner(_blockId);
@@ -1020,22 +1038,22 @@ contract devGaangs {
         emit UpdatedBlockOwnerPrice(_blockId, _new);
     }
 
-    function updateOwnerPrice(
+    function updateCollectiveJobOwnerPrice(
         uint256 _jobId,
         uint256 _new
     ) external {
         require(
             balanceOf(msg.sender, _jobId) > 0, 
-            "updateOwnerPrice: sender not an owner of the asset"
+            "updateCollectiveJobOwnerPrice: sender not an owner of the asset"
         );
         require(
             jobStatus[_jobId] == JobStatus.FINALIZED, 
-            "updateOwnerPrice: auction live cannot update price"
+            "updateCollectiveJobOwnerPrice: auction live cannot update price"
         );
         uint256 old = ownerPrices[_jobId][msg.sender];
         require(
             _new != old, 
-            "updateOwnerPrice: not an update"
+            "updateCollectiveJobOwnerPrice: not an update"
         );
         uint256 weight = balanceOf(msg.sender, _jobId);
 
@@ -1053,12 +1071,12 @@ contract devGaangs {
             uint256 reservePriceMin = averageReserve * minReserveFactor / 1000;
             require(
                 _new >= reservePriceMin, 
-                "updateOwnerPrice: reserve price too low"
+                "updateCollectiveJobOwnerPrice: reserve price too low"
             );
             uint256 reservePriceMax = averageReserve * maxReserveFactor / 1000;
             require(
                 _new <= reservePriceMax, 
-                "updateOwnerPrice: reserve price too high"
+                "updateCollectiveJobOwnerPrice: reserve price too high"
             );
             votingTokens[_jobId] += weight;
             reserveTotal[_jobId] += weight * _new;
@@ -1074,20 +1092,20 @@ contract devGaangs {
             uint256 reservePriceMin = averageReserve * minReserveFactor / 1000;
             require(
                 _new >= reservePriceMin, 
-                "updateOwnerPrice: reserve price too low"
+                "updateCollectiveJobOwnerPrice: reserve price too low"
             );
             uint256 reservePriceMax = averageReserve * maxReserveFactor / 1000;
             require(
                 _new <= reservePriceMax, 
-                "updateOwnerPrice: reserve price too high"
+                "updateCollectiveJobOwnerPrice: reserve price too high"
             );
             reserveTotal[_jobId] = reserveTotal[_jobId] + (weight * _new) - (weight * old);
         }
         ownerPrices[_jobId][msg.sender] = _new;
-        emit UpdatedUserPrice(msg.sender, _new);
+        emit UpdatedCollectiveJobOwnerPrice(msg.sender, _new);
     }
 
-
+    
 
     function workerPaymentFunction(
         uint256 _jobId,
