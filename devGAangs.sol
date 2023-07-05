@@ -179,7 +179,7 @@ contract devGaangs {
             "voteToCancelFundingNewJob: cancelling not allowed"
         );
         votesTotalCancel[_jobId] += balanceOf(msg.sender, _jobId);
-        if (votesTotalCancel[_jobId] * 1000 > minCancelQuorum * totalSupply[_jobId]) {
+        if (votesTotalCancel[_jobId] * 1000 > minCancelQuorum * totalSupply(_jobId)) {
             jobStatus[_jobId] = JobStatus.CANCELLED;
             delete votesTotalCancel[_jobId];
         }
@@ -467,7 +467,7 @@ contract devGaangs {
         );
         if (_appointedDev != address(0)) {
             votesTotalApproveDev[_jobId][_appointeddev] += balanceOf(msg.sender, _jobId);
-            if (votesTotalApproveDev[_jobId][_appointedDev] * 1000 > minApproveQuorum * totalSupply[_jobId]) {
+            if (votesTotalApproveDev[_jobId][_appointedDev] * 1000 > minApproveQuorum * totalSupply(_jobId)) {
                 if (devProposal[_jobId][_appointedDev] > jobTreasury[_jobId] + totalBidOnDev[_jobId][_appointedDev]) {
                     jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
                     jobRewardAmount[_jobId] = devProposal[_jobId][_appointedDev];
@@ -484,7 +484,7 @@ contract devGaangs {
             } 
         } else if (_apppointedGaang != 0) {
             votesTotalApproveGaang[_jobId][_apppointedGaang] += balanceOf(msg.sender, _jobId);
-            if (votesTotalApproveGaang[_jobId][_apppointedGaang] * 1000 > minApproveQuorum * totalSupply[_jobId]) {
+            if (votesTotalApproveGaang[_jobId][_apppointedGaang] * 1000 > minApproveQuorum * totalSupply(_jobId)) {
                 if (gaangProposal[_jobId][_apppointedGaang] > jobTreasury[_jobId] + totalBidOnGaang[_jobId][_apppointedGaang]) {
                     jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
                     jobRewardAmount[_jobId] = gaangProposal[_jobId][_apppointedGaang];
@@ -628,7 +628,7 @@ contract devGaangs {
         );
         updateUserTokenShare(_jobId, msg.sender);
         votesTotalPayWorker[_jobId][_amount] += balanceOf(msg.sender, _jobId);
-        if (votesTotalPayWorker[_jobId][_amount] * 1000 > minPayQuorum * totalSupply[_jobId]) {
+        if (votesTotalPayWorker[_jobId][_amount] * 1000 > minPayQuorum * totalSupply(_jobId)) {
             if (_amount >= jobTreasury[_jobId]) {
                 jobStatus[_jobId] = JobStatus.EXTRAFUNDING;
                 jobRewardAmount[_jobId] = _amount;
@@ -730,7 +730,7 @@ contract devGaangs {
         );
         updateUserTokenShare(_jobId, msg.sender);
         votesTotalChallenge[_jobId][_amount] += balanceOf(msg.sender, _jobId);
-        if (votesTotalChallenge[_jobId][_amount] * 1000 > minChallengeQuorum * totalSupply[_jobId]) {
+        if (votesTotalChallenge[_jobId][_amount] * 1000 > minChallengeQuorum * totalSupply(_jobId)) {
             jobStatus[_jobId] = JobStatus.CHALLENGED;
             delete votesTotalPayWorker[_jobId][_amount];
         }
@@ -915,7 +915,7 @@ contract devGaangs {
         );
         updateUserTokenShare(_jobId, msg.sender);
         votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] += balanceOf(msg.sender, _jobId);
-        if (votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] * 1000 > minJobPullRequestOrPushRequestQuorum * totalSupply[_jobId]) {
+        if (votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] * 1000 > minJobPullRequestOrPushRequestQuorum * totalSupply(_jobId)) {
             if (jobPullRequest[_blockId][_jobId]) {
                 devBlock[_jobId] = _blockId;
                 delete jobPullRequest[_blockId][_jobId];
@@ -981,7 +981,8 @@ contract devGaangs {
             chainNumber[_blockIdFrom] = chainNumber[_blockIdTo];
             chainUpdateIndex[chainNumber[_blockIdFrom]]++;
         } else {
-            if (rootBlockOwner[_blockIdTo] == msg.sender && 
+            if (
+                rootBlockOwner[_blockIdTo] == msg.sender && 
                 blockUpdateIndex[_blockIdTo] == chainUpdateIndex[chainNumber[_blockIdTo]]
             ) {
                 headBlock[_blockIdFrom] = _blockIdTo;
@@ -1152,7 +1153,7 @@ contract devGaangs {
         );
         updateUserTokenShare(_jobId, msg.sender);
         votesTotalFinalizeJob[_jobId][_url] += balanceOf(msg.sender, _jobId);
-        if (votesTotalFinalizeJob[_jobId][_url] * 1000 > minFinalizeJobQuorum * totalSupply[_jobId]) {
+        if (votesTotalFinalizeJob[_jobId][_url] * 1000 > minFinalizeJobQuorum * totalSupply(_jobId)) {
             if (finalizeCooling[_jobId] != 0) {
                 require(
                     block.timestamp + numberFinalizeCoolingDays * 1 days >= finalizeCooling[_jobId], 
@@ -1166,6 +1167,152 @@ contract devGaangs {
             }
         }
         emit VotedFinalizeJob(_blockId, _jobId);
+    }
+
+    function startAuction(uint256 _amount, uint256 _jobId, uint256 _blockId) external payable {
+        uint256 contribution;
+        if (_blockId > 0) {
+            require(
+                blockOwnerPrice[_blockId] > 0, 
+                "startAuction: no active reserve price"
+            );
+            if (msg.value > 0) {
+                require(
+                    msg.value > blockOwnerPrice[_blockId], 
+                    "startAuction: bid lower than the reserve price"
+                );
+                stakingFunction();
+                contribution = msg.value;
+            } else if (_amount > 0) {
+                require(
+                    _amount > blockOwnerPrice[_blockId], 
+                    "startAuction: bid lower than the reserve price"
+                );
+                stakingFunction(wmaticContract, _amount);
+                currentBlockAuctionToken[_blockId] = wmaticContract;
+                contribution = _amount;
+            } else { 
+                return;
+            }
+            blockAuctionEnd[_blockId] = block.timestamp + (minAuctionDays * 1 days);
+            blockLivePrice[_blockId] = contribution;
+            blockWinning[_blockId] = msg.sender;
+        } else if (_jobId > 0) {
+            require(
+                jobStatus[_jobId] == JobStatus.FINALIZED;, 
+                "startAuction: not a finalized job"
+            );
+            require(
+                votingTokens[_jobId] * 1000 >= minAuctionQuorum * totalSupply(_jobId), 
+                "startAuction: no active reserve price"
+            );
+            if (msg.value > 0) {
+                require(
+                    jobFundingToken[_jobId] == address(0), 
+                    "startAuction: wrong token address parameter"
+                );
+                require(
+                    msg.value > reserveTotal[_jobId] / votingTokens[_jobId], 
+                    "startAuction: bid lower than the reserve price"
+                );
+                stakingFunction();
+                contribution = msg.value;
+            } else if (_amount > 0) {
+                require(
+                    _amount > reserveTotal[_jobId] / votingTokens[_jobId], 
+                    "startAuction: bid lower than the reserve price"
+                );
+                stakingFunction(jobFundingToken[_jobId], _amount);
+                contribution = _amount;
+            } else { 
+                return;
+            }
+            jobAuctionEnd[_jobId] = block.timestamp + (minAuctionDays * 1 days);
+            jobLivePrice[_jobId] = contribution;
+            jobWinning[_jobId] = msg.sender;
+        } else {
+            return;
+        }
+        emit StartedAuction(_jobId, _blockId, msg.sender, jobLivePrice[_jobId], blockLivePrice[_blockId]);
+    }
+
+    function bid(uint256 _amount, uint256 _jobId, uint256 _blockId) external payable {
+        uint256 contribution;
+        if (_blockId > 0) {
+            require(
+                blockLivePrice[_blockId] > 0, 
+                "bid: no active auction"
+            );
+            if (msg.value > 0) {
+                require(
+                    msg.value > blockLivePrice[_blockId], 
+                    "bid: bid lower than the previous one"
+                );
+                stakingFunction();
+                contribution = msg.value;
+            } else if (_amount > 0) {
+                require(
+                    _amount > blockLivePrice[_blockId], 
+                    "bid: bid lower than the previous one"
+                );
+                stakingFunction(wmaticContract, _amount);
+                contribution = _amount;
+            } else { 
+                return;
+            }
+            if (currentBlockAuctionToken[_blockId] == wmaticContract) {
+                unstakingFunction(wmaticContract, blockWinning[_blockId], blockLivePrice[_blockId]);
+            } else {
+                unstakingFunction(, blockWinning[_blockId], blockLivePrice[_blockId]);
+            }
+            if (_amount > 0) {
+                currentBlockAuctionToken[_blockId] = wmaticContract;
+            } else {
+                delete currentBlockAuctionToken[_blockId];
+            }
+            if (blockAuctionEnd[_blockId] - block.timestamp <= 15 minutes) {
+                blockAuctionEnd[_blockId] += 15 minutes;
+            }
+            blockLivePrice[_blockId] = contribution;
+            blockWinning[_blockId] = msg.sender;
+        } else if (_jobId > 0) {
+            require(
+                jobLivePrice[_jobId] > 0, 
+                "bid: no active auction"
+            );
+            if (msg.value > 0) {
+                require(
+                    jobFundingToken[_jobId] == address(0), 
+                    "bid: wrong token address parameter"
+                );
+                require(
+                    msg.value > jobLivePrice[_jobId], 
+                    "bid: bid lower than the previous one"
+                );
+                stakingFunction();
+                contribution = msg.value;
+            } else if (_amount > 0) {
+                require(
+                    _amount > jobLivePrice[_jobId], 
+                    "bid: bid lower than the previous one"
+                );
+                stakingFunction(jobFundingToken[_jobId], _amount);
+                contribution = _amount;
+            } else { 
+                return;
+            }
+            unstakingFunction(jobFundingToken[_jobId], jobWinning[_jobId], jobLivePrice[_jobId])
+            jobAuctionEnd[_jobId] = block.timestamp + (minAuctionDays * 1 days);
+            jobLivePrice[_jobId] = contribution;
+            jobWinning[_jobId] = msg.sender;
+        } else {
+            return;
+        }
+        emit Bid(_jobId, _blockId, msg.sender, jobLivePrice[_jobId], blockLivePrice[_blockId]);
+    }
+
+    function finalizeAuction(uint256 _amount, uint256 _jobId, uint256 _blockId) external payable {
+        
     }
 
     function workerPaymentFunction(
