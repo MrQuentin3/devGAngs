@@ -684,7 +684,8 @@ contract devGaangs {
 
     function challenge(
         uint256 _jobId,
-        uint256 _gaangNumber
+        uint256 _gaangNumber,
+        bool _devChallenge
     ) external {
         require(
             jobStatus[_jobId] == JobStatus.WORKING ||
@@ -698,7 +699,7 @@ contract devGaangs {
                 gaangPartner[_jobId][_gaangNumber], 
                 "challenge: not an appointed gaang member"
             );
-        } else {
+        } else if (_devChallenge) {
             require(
                 devPartner[_jobId][msg.sender], 
                 "challenge: not the appointed dev"
@@ -881,6 +882,12 @@ contract devGaangs {
             "acceptJobPullRequestOrPushRequest: not the job owner"
         );
         require(
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.FINALIZED ||
+            jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE, 
+            "acceptJobPullRequestOrPushRequest: cannot move the job currently"
+        );
+        require(
             blockUpdateIndex[_blockId] == chainUpdateIndex[chainNumber[_blockId]], 
             "acceptJobPullRequestOrPushRequest: not updated block"
         );
@@ -905,6 +912,12 @@ contract devGaangs {
         require(
             balanceOf(msg.sender, _jobId) > 0, 
             "voteAcceptJobPullRequestOrPushRequest: not a contributor"
+        );
+        require(
+            jobStatus[_jobId] == JobStatus.WORKING ||
+            jobStatus[_jobId] == JobStatus.FINALIZED ||
+            jobStatus[_jobId] == JobStatus.SETTLEDCHALLENGE, 
+            "voteAcceptJobPullRequestOrPushRequest: cannot move the job currently"
         );
         updateUserTokenShare(_jobId, msg.sender);
         votesTotalJobPullRequestOrPushRequest[_jobId][_blockId] += balanceOf(msg.sender, _jobId);
@@ -1054,8 +1067,8 @@ contract devGaangs {
             _new != 0, 
             "updateCollectiveJobOwnerPrice: not an update"
         );
+        updateUserTokenShare(_jobId, msg.sender);
         uint256 weight = balanceOf(msg.sender, _jobId);
-
         if (votingTokens == 0) {
             votingTokens[_jobId] = weight;
             reserveTotal[_jobId] = weight * _new;
@@ -1138,7 +1151,7 @@ contract devGaangs {
             "voteFinalizeJob: not a contributor"
         );
         require(
-            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            jobStatus[_jobId] == JobStatus.FINALIZED, 
             "voteFinalizeJob: not an active job"
         );
         updateUserTokenShare(_jobId, msg.sender);
@@ -1156,10 +1169,65 @@ contract devGaangs {
                 if (jobTreasury[_jobId] > 0) finalizeCooling[_jobId] = block.timestamp;
             }
         }
-        emit VotedFinalizeJob(_blockId, _jobId);
+        emit VotedFinalizeJob(jobId);
+    }
+
+    function fixedPriceOrAuction(
+        uint256 _jobId,
+        uint256 _blockId,
+        bool _fixedPrice
+    ) external {
+        require(
+            jobMaster[_jobId] == msg.sender && !collectiveJobFunding[_jobId], 
+            "fixedPriceOrAuction: not the job owner"
+        );
+        require(
+            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            "fixedPriceOrAuction: not an active job"
+        );
+        require(
+            _jobId == 0 ||
+            _blockId == 0, 
+            "fixedPriceOrAuction: invalid variables"
+        );
+        if (_jobId != 0) {
+            fixedPriceJob[_jobId] = _fixedPrice;
+            emit JobFixedPriceOrAuction(_jobId);
+        } else (_blockId != 0) {
+            fixedPriceBlock[_jobId] = _fixedPrice;
+            emit BlockFixedPriceOrAuction(_blockId);
+        } else {
+            return;
+        }
+    }
+
+    function voteFixedPriceOrAuction(
+        uint256 _jobId,
+        bool _fixedPrice
+    ) external {
+        require(
+            balanceOf(msg.sender, _jobId) > 0, 
+            "voteFixedPriceOrAuction: not a contributor"
+        );
+        require(
+            jobStatus[_jobId] != JobStatus.INACTIVE, 
+            "voteFixedPriceOrAuction: not an active job"
+        );
+        updateUserTokenShare(_jobId, msg.sender);
+        votesTotalFixedPriceOrAuction[_jobId][_fixedPrice] += balanceOf(msg.sender, _jobId);
+        if (votesTotalFixedPriceOrAuction[_jobId][_fixedPrice] * 1000 > minFixedPriceOrAuctionQuorum * totalSupply(_jobId)) {
+            fixedPriceJob[_jobId] = _fixedPrice;
+            delete votesTotalFixedPriceOrAuction[_jobId][_fixedPrice];
+        }
+        emit VotedFixedPriceOrAuction(_jobId, _fixedPrice);
     }
 
     function startAuction(uint256 _amount, uint256 _jobId, uint256 _blockId) external payable {
+        require(
+            _jobId == 0 ||
+            _blockId == 0, 
+            "startAuction: invalid variables"
+        );
         uint256 contribution;
         if (_blockId > 0) {
             require(
@@ -1188,7 +1256,9 @@ contract devGaangs {
             } else { 
                 return;
             }
-            blockAuctionEnd[_blockId] = block.timestamp + (minAuctionDays * 1 days);
+            if (fixedPriceBlock[_blockId]) {
+                blockAuctionEnd[_blockId] = block.timestamp + (minAuctionDays * 1 days);
+            }
             blockLivePrice[_blockId] = contribution;
             blockWinning[_blockId] = msg.sender;
             emit StartedBlockAuction(_blockId, msg.sender, blockLivePrice[_blockId]);
@@ -1222,7 +1292,9 @@ contract devGaangs {
             } else { 
                 return;
             }
-            jobAuctionEnd[_jobId] = block.timestamp + (minAuctionDays * 1 days);
+            if (fixedPriceJob[_jobId]) {
+                jobAuctionEnd[_jobId] = block.timestamp + (minAuctionDays * 1 days);
+            }
             jobLivePrice[_jobId] = contribution;
             jobWinning[_jobId] = msg.sender;
             emit StartedJobAuction(_jobId, msg.sender, jobLivePrice[_jobId]);
@@ -1235,7 +1307,8 @@ contract devGaangs {
         uint256 contribution;
         if (_blockId > 0) {
             require(
-                blockLivePrice[_blockId] > 0, 
+                blockLivePrice[_blockId] > 0 &&
+                block.timestamp < blockAuctionEnd[_blockId], 
                 "bid: no active auction"
             );
             if (msg.value > 0) {
@@ -1273,7 +1346,8 @@ contract devGaangs {
             emit BlockBid(_blockId, msg.sender, blockLivePrice[_blockId]);
         } else if (_jobId > 0) {
             require(
-                jobLivePrice[_jobId] > 0, 
+                jobLivePrice[_jobId] > 0 &&
+                block.timestamp < jobAuctionEnd[_jobId], 
                 "bid: no active auction"
             );
             if (msg.value > 0) {
@@ -1309,22 +1383,36 @@ contract devGaangs {
 
     function finalizeAuction(uint256 _jobId, uint256 _blockId) external payable {
         if (_blockId > 0) {
-            require(
-                blockLivePrice[_blockId] > 0 &&
-                block.timestamp >= blockAuctionEnd[_blockId], 
-                "finalizeAuction: auction live"
-            );
+            if (!fixedPriceBlock[_blockId]) {
+                require(
+                    blockLivePrice[_blockId] > 0 &&
+                    block.timestamp >= blockAuctionEnd[_blockId], 
+                    "finalizeAuction: no live auction"
+                );
+            } else {
+                require(
+                    blockLivePrice[_blockId] > 0, 
+                    "finalizeAuction: no live sell"
+                );
+            }
             unstakingFunction(currentBlockAuctionToken[_blockId], devGaangsProtocolAddress, blockLivePrice[_blockId] * (devGaangsExitShare / 1000));
             unstakingFunction(currentBlockAuctionToken[_blockId], rootBlockOwner[_blockId], blockLivePrice[_blockId] * (1 - devGaangsExitShare / 1000));
             rootBlockOwner[_blockId] = blockWinning[_blockId];
             chainUpdateIndex[chainNumber[_blockId]]++;
             emit FinalizedBlockAuction(_blockId);
         } else if (_jobId > 0) {
-            require(
-                jobLivePrice[_jobId] > 0 &&
-                block.timestamp >= jobAuctionEnd[_jobId], 
-                "finalizeAuction: auction live"
-            );
+            if (!fixedPriceJob[_blockId]) {
+                require(
+                    jobLivePrice[_jobId] > 0 &&
+                    block.timestamp >= jobAuctionEnd[_jobId], 
+                    "finalizeAuction: no live auction"
+                );
+            } else {
+                require(
+                    jobLivePrice[_jobId] > 0, 
+                    "finalizeAuction: no live sell"
+                );
+            }
             unstakingFunction(jobFundingToken[_jobId], devGaangsProtocolAddress, jobLivePrice[_jobId] * (devGaangsExitShare / 1000));
             if (collectiveJobFunding[_jobId]) {
                 jobTreasury[_jobId] += jobLivePrice[_jobId] * (1 - devGaangsExitShare / 1000);
